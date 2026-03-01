@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EatSure OCR (PWA)</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="title">EatSure — OCR</div>
+    <div class="pill">PWA</div>
+  </header>
+
+  <main class="wrap">
+    <section class="card">
+      <h2>1) Backend URL</h2>
+      <p class="muted">Örn: https://eatsure-backend-4dkh.onrender.com</p>
+      <input id="backendUrl" type="url" placeholder="Backend URL" />
+      <div class="row">
+        <button id="saveBackend" class="btn">Kaydet</button>
+        <button id="ping" class="btn btn-ghost">Health</button>
+      </div>
+      <div id="healthOut" class="muted small"></div>
+    </section>
+
+    <section class="card">
+      <h2>2) Foto seç → OCR</h2>
+      <input id="imageInput" type="file" accept="image/*" capture="environment" />
+      <div class="row">
+        <button id="runOcr" class="btn" disabled>OCR Başlat</button>
+        <button id="clearAll" class="btn btn-ghost">Temizle</button>
+      </div>
+
+      <div class="progress">
+        <div id="progBar" class="bar" style="width:0%"></div>
+      </div>
+      <div id="status" class="muted small"></div>
+
+      <div class="preview">
+        <img id="previewImg" alt="Önizleme" />
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>3) OCR Metni</h2>
+      <textarea id="labelText" rows="10" placeholder="OCR çıktısı burada..."></textarea>
+
+      <div class="grid2">
+        <div>
+          <label class="lbl">Barkod (opsiyonel)</label>
+          <input id="barcode" placeholder="869..." />
+        </div>
+        <div>
+          <label class="lbl">Marka (opsiyonel)</label>
+          <input id="brand" placeholder="Schar / Ülker ..." />
+        </div>
+      </div>
+
+      <label class="lbl">Ürün adı (opsiyonel)</label>
+      <input id="name" placeholder="Ürün adı..." />
+
+      <div class="row">
+        <button id="analyze" class="btn btn-primary">Analiz Et</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Sonuç</h2>
+      <pre id="result" class="result">{}</pre>
+    </section>
+
+    <section class="card">
+      <h2>Kurulum</h2>
+      <p class="muted">
+        iPhone: Safari → Paylaş → “Ana Ekrana Ekle”<br/>
+        Android: Chrome → “Uygulama yükle” / “Ana ekrana ekle”
+      </p>
+    </section>
+  </main>
+
+  <!-- Tesseract CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="./app.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./service-worker.js").catch(()=>{});
+    }
+  </script>
+</body>
+</html>
