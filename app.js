@@ -1,176 +1,117 @@
-const $ = (id) => document.getElementById(id);
+// --- Simple local storage for backend url ---
+const LS_BACKEND = "eatsure_backend_url";
 
-const backendUrlEl = $("backendUrl");
-const saveBackendBtn = $("saveBackend");
-const pingBtn = $("ping");
-const healthOut = $("healthOut");
+const backendUrlEl = document.getElementById("backendUrl");
+const saveBackendBtn = document.getElementById("saveBackend");
+const checkHealthBtn = document.getElementById("checkHealth");
+const healthResultEl = document.getElementById("healthResult");
 
-const imageInput = $("imageInput");
-const runOcrBtn = $("runOcr");
-const clearBtn = $("clearAll");
-const previewImg = $("previewImg");
+const fileInput = document.getElementById("fileInput");
+const previewImg = document.getElementById("previewImg");
 
-const progBar = $("progBar");
-const statusEl = $("status");
+const runOcrBtn = document.getElementById("runOcr");
+const sendToBackendBtn = document.getElementById("sendToBackend");
 
-const labelTextEl = $("labelText");
-const barcodeEl = $("barcode");
-const brandEl = $("brand");
-const nameEl = $("name");
-
-const analyzeBtn = $("analyze");
-const resultEl = $("result");
-
-function getBackend() {
-  return (localStorage.getItem("EATSURE_BACKEND_URL") || "").trim();
-}
-function setBackend(url) {
-  localStorage.setItem("EATSURE_BACKEND_URL", url.trim());
-}
-function normalizeBackend(url) {
-  if (!url) return "";
-  // sondaki slash'ı temizle
-  return url.replace(/\/+$/, "");
-}
-
-function setStatus(msg) {
-  statusEl.textContent = msg || "";
-}
-function setProgress(p) {
-  const pct = Math.max(0, Math.min(100, Math.round(p)));
-  progBar.style.width = pct + "%";
-}
-
-function setResult(obj) {
-  resultEl.textContent = JSON.stringify(obj, null, 2);
-}
-
-// init backend input
-backendUrlEl.value = getBackend();
-
-saveBackendBtn.addEventListener("click", () => {
-  const url = normalizeBackend(backendUrlEl.value);
-  setBackend(url);
-  backendUrlEl.value = url;
-  healthOut.textContent = url ? "Kaydedildi." : "Boş URL kaydedilemez.";
-});
-
-pingBtn.addEventListener("click", async () => {
-  const base = normalizeBackend(backendUrlEl.value || getBackend());
-  if (!base) return (healthOut.textContent = "Backend URL gir.");
-  try {
-    const r = await fetch(base + "/health");
-    const t = await r.text();
-    healthOut.textContent = `Health: ${r.status} — ${t}`;
-  } catch (e) {
-    healthOut.textContent = "Health başarısız: " + e.message;
-  }
-});
+const ocrTextEl = document.getElementById("ocrText");
+const resultEl = document.getElementById("result");
 
 let selectedFile = null;
-imageInput.addEventListener("change", () => {
-  const f = imageInput.files && imageInput.files[0];
-  selectedFile = f || null;
-  runOcrBtn.disabled = !selectedFile;
-  setProgress(0);
-  setStatus("");
-  if (!selectedFile) {
-    previewImg.style.display = "none";
+
+// Init
+backendUrlEl.value = localStorage.getItem(LS_BACKEND) || "https://eatsure-backend-4dkh.onrender.com";
+
+saveBackendBtn.addEventListener("click", () => {
+  const v = (backendUrlEl.value || "").trim().replace(/\/+$/, "");
+  localStorage.setItem(LS_BACKEND, v);
+  backendUrlEl.value = v;
+  healthResultEl.textContent = "Kaydedildi.";
+});
+
+checkHealthBtn.addEventListener("click", async () => {
+  healthResultEl.textContent = "Kontrol ediliyor...";
+  const base = (localStorage.getItem(LS_BACKEND) || backendUrlEl.value || "").trim().replace(/\/+$/, "");
+  try {
+    const r = await fetch(`${base}/health`);
+    const t = await r.text();
+    healthResultEl.textContent = `${r.status} ${t}`;
+  } catch (e) {
+    healthResultEl.textContent = `Hata: ${e.message}`;
+  }
+});
+
+// File selection
+fileInput.addEventListener("change", () => {
+  const f = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+  selectedFile = f;
+
+  if (!f) {
     previewImg.src = "";
+    previewImg.style.display = "none";
     return;
   }
-  const url = URL.createObjectURL(selectedFile);
+
+  const url = URL.createObjectURL(f);
   previewImg.src = url;
   previewImg.style.display = "block";
 });
 
-clearBtn.addEventListener("click", () => {
-  selectedFile = null;
-  imageInput.value = "";
-  labelTextEl.value = "";
-  barcodeEl.value = "";
-  brandEl.value = "";
-  nameEl.value = "";
-  previewImg.src = "";
-  previewImg.style.display = "none";
-  setProgress(0);
-  setStatus("");
-  setResult({});
-});
-
+// OCR button
 runOcrBtn.addEventListener("click", async () => {
-  if (!selectedFile) return;
+  resultEl.textContent = "";
+  if (!selectedFile) {
+    resultEl.textContent = "Önce fotoğraf seç.";
+    return;
+  }
 
-  setResult({});
-  setProgress(0);
-  setStatus("OCR hazırlanıyor...");
+  runOcrBtn.disabled = true;
+  runOcrBtn.textContent = "OCR çalışıyor...";
 
   try {
-    // Dil: önce "tur+eng" deniyoruz (Türkçe etiketlerde daha iyi).
-    // Eğer çok ağır gelirse sadece "eng" yapabiliriz.
-    const worker = await Tesseract.createWorker("tur+eng");
-
-    setStatus("OCR çalışıyor...");
-    const { data } = await worker.recognize(selectedFile, {}, {
-      logger: (m) => {
-        if (m.status === "recognizing text") {
-          setProgress((m.progress || 0) * 100);
-        }
-        // diğer status'ları da minimal göster
-        if (m.status && m.status !== "recognizing text") {
-          setStatus(m.status);
-        }
-      }
-    });
-
-    await worker.terminate();
-
-    const text = (data && data.text) ? data.text.trim() : "";
-    labelTextEl.value = text;
-    setProgress(100);
-    setStatus(text ? "OCR bitti. Metni kontrol edip düzenleyebilirsin." : "OCR bitti ama metin boş geldi.");
-
+    // Burayı kendi OCR motoruna bağlayacağız.
+    // Şimdilik placeholder: “metin yok” demesin diye.
+    const text = await runOcrOnImage(selectedFile);
+    ocrTextEl.value = text || "";
+    resultEl.textContent = "OCR tamamlandı.";
   } catch (e) {
-    setStatus("OCR hata: " + e.message);
-    setProgress(0);
+    resultEl.textContent = `OCR hata: ${e.message}`;
+  } finally {
+    runOcrBtn.disabled = false;
+    runOcrBtn.textContent = "OCR Başlat";
   }
 });
 
-analyzeBtn.addEventListener("click", async () => {
-  const base = normalizeBackend(backendUrlEl.value || getBackend());
-  if (!base) return alert("Backend URL gir ve kaydet.");
+// Send to backend
+sendToBackendBtn.addEventListener("click", async () => {
+  resultEl.textContent = "";
+  const text = (ocrTextEl.value || "").trim();
+  if (!text) {
+    resultEl.textContent = "OCR metni boş. Önce OCR çalıştır veya metni yapıştır.";
+    return;
+  }
 
-  const labelText = (labelTextEl.value || "").trim();
-  if (labelText.length < 3) return alert("OCR metni çok kısa. Önce OCR çalıştır veya metin yapıştır.");
+  const base = (localStorage.getItem(LS_BACKEND) || backendUrlEl.value || "").trim().replace(/\/+$/, "");
 
-  const payload = {
-    labelText,
-    barcode: (barcodeEl.value || "").trim() || undefined,
-    brand: (brandEl.value || "").trim() || undefined,
-    name: (nameEl.value || "").trim() || undefined
-  };
-
-  setStatus("Analiz ediliyor...");
-  setResult({ loading: true });
+  sendToBackendBtn.disabled = true;
+  sendToBackendBtn.textContent = "Analiz ediliyor...";
 
   try {
-    const r = await fetch(base + "/analyze-label", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-
-    const data = await r.json().catch(() => null);
-    if (!r.ok) {
-      setStatus("Analiz hata.");
-      return setResult({ http: r.status, error: data || "unknown_error" });
-    }
-
-    setStatus("Tamam.");
-    setResult(data);
-
+    // Örnek: backend’de OCR metni için bir endpoint yoksa,
+    // şimdilik sadece gösteriyoruz.
+    // OCR endpointi eklediğimizde burası POST /ocr-analyze gibi olacak.
+    const payload = { text };
+    resultEl.textContent = JSON.stringify(payload, null, 2) + "\n\n(Not: Backend OCR endpointi eklenince burada analiz sonucu dönecek.)";
   } catch (e) {
-    setStatus("Analiz hata: " + e.message);
-    setResult({ error: e.message });
+    resultEl.textContent = `Backend hata: ${e.message}`;
+  } finally {
+    sendToBackendBtn.disabled = false;
+    sendToBackendBtn.textContent = "Analiz Et";
   }
 });
+
+// --- Placeholder OCR ---
+// Burayı, senin kurduğun OCR (örn. Tesseract / Apple Vision / vs) ile değiştiriyoruz.
+async function runOcrOnImage(file) {
+  // Şimdilik sadece “seçim çalışıyor mu” test edelim:
+  // gerçek OCR entegrasyonunu bir sonraki adımda bağlayacağız.
+  return "TEST: Foto seçimi OK. OCR entegrasyonu bir sonraki adım.";
+}
