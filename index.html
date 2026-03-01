@@ -2,91 +2,60 @@
 <html lang="tr">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>EatSure OCR (PWA)</title>
-  <link rel="manifest" href="./manifest.json" />
-  <link rel="stylesheet" href="./styles.css" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#ffffff" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="styles.css" />
+  <title>EatSure OCR</title>
 </head>
 <body>
-  <header class="topbar">
-    <div class="title">EatSure — OCR</div>
-    <div class="pill">PWA</div>
-  </header>
-
   <main class="wrap">
+    <h1>EatSure OCR</h1>
+
     <section class="card">
-      <h2>1) Backend URL</h2>
-      <p class="muted">Örn: https://eatsure-backend-4dkh.onrender.com</p>
-      <input id="backendUrl" type="url" placeholder="Backend URL" />
+      <label class="label">Backend URL</label>
       <div class="row">
+        <input id="backendUrl" class="input" placeholder="https://...onrender.com" />
         <button id="saveBackend" class="btn">Kaydet</button>
-        <button id="ping" class="btn btn-ghost">Health</button>
       </div>
-      <div id="healthOut" class="muted small"></div>
+      <div class="row">
+        <button id="checkHealth" class="btn btn-secondary">Health Kontrol</button>
+        <span id="healthResult" class="muted"></span>
+      </div>
     </section>
 
     <section class="card">
-      <h2>2) Foto seç → OCR</h2>
-      <input id="imageInput" type="file" accept="image/*" capture="environment" />
-      <div class="row">
-        <button id="runOcr" class="btn" disabled>OCR Başlat</button>
-        <button id="clearAll" class="btn btn-ghost">Temizle</button>
-      </div>
+      <label class="label">Etiket fotoğrafı</label>
 
-      <div class="progress">
-        <div id="progBar" class="bar" style="width:0%"></div>
+      <!-- ÖNEMLİ: capture YOK. Sadece accept var. -->
+      <input
+        id="fileInput"
+        type="file"
+        accept="image/*"
+        class="file"
+      />
+
+      <div class="row">
+        <button id="runOcr" class="btn">OCR Başlat</button>
+        <button id="sendToBackend" class="btn btn-secondary">Analiz Et</button>
       </div>
-      <div id="status" class="muted small"></div>
 
       <div class="preview">
-        <img id="previewImg" alt="Önizleme" />
-      </div>
-    </section>
-
-    <section class="card">
-      <h2>3) OCR Metni</h2>
-      <textarea id="labelText" rows="10" placeholder="OCR çıktısı burada..."></textarea>
-
-      <div class="grid2">
-        <div>
-          <label class="lbl">Barkod (opsiyonel)</label>
-          <input id="barcode" placeholder="869..." />
-        </div>
-        <div>
-          <label class="lbl">Marka (opsiyonel)</label>
-          <input id="brand" placeholder="Schar / Ülker ..." />
-        </div>
+        <img id="previewImg" alt="" />
       </div>
 
-      <label class="lbl">Ürün adı (opsiyonel)</label>
-      <input id="name" placeholder="Ürün adı..." />
+      <label class="label">OCR Metni</label>
+      <textarea id="ocrText" class="textarea" rows="10" placeholder="OCR sonucu burada..."></textarea>
 
-      <div class="row">
-        <button id="analyze" class="btn btn-primary">Analiz Et</button>
-      </div>
+      <label class="label">Sonuç</label>
+      <pre id="result" class="pre"></pre>
     </section>
 
-    <section class="card">
-      <h2>Sonuç</h2>
-      <pre id="result" class="result">{}</pre>
-    </section>
-
-    <section class="card">
-      <h2>Kurulum</h2>
-      <p class="muted">
-        iPhone: Safari → Paylaş → “Ana Ekrana Ekle”<br/>
-        Android: Chrome → “Uygulama yükle” / “Ana ekrana ekle”
-      </p>
-    </section>
+    <p class="muted small">
+      Not: iOS’ta fotoğraf seçimi için input’ta <b>capture</b> olmamalı.
+    </p>
   </main>
 
-  <!-- Tesseract CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <script src="./app.js"></script>
-  <script>
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./service-worker.js").catch(()=>{});
-    }
-  </script>
+  <script src="app.js"></script>
 </body>
 </html>
