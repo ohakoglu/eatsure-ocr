@@ -15,11 +15,6 @@ const sendToBackendBtn = document.getElementById("sendToBackend");
 const ocrTextEl = document.getElementById("ocrText");
 const resultEl = document.getElementById("result");
 
-// (Opsiyonel) HTML'de bu inputlar varsa otomatik kullanacağız; yoksa null kalır.
-const barcodeEl = document.getElementById("barcode");
-const brandEl = document.getElementById("brand");
-const nameEl = document.getElementById("name");
-
 let selectedFile = null;
 
 // Init
@@ -72,22 +67,27 @@ runOcrBtn.addEventListener("click", async () => {
   }
 
   runOcrBtn.disabled = true;
+  sendToBackendBtn.disabled = true;
   runOcrBtn.textContent = "OCR çalışıyor...";
 
   try {
-    // Burayı daha sonra gerçek OCR motoruna bağlayacağız.
-    const text = await runOcrOnImage(selectedFile);
-    ocrTextEl.value = text || "";
-    resultEl.textContent = "OCR tamamlandı.";
+    const text = await runOcrOnImage(selectedFile, (msg) => {
+      // ilerleme mesajı
+      resultEl.textContent = msg;
+    });
+
+    ocrTextEl.value = (text || "").trim();
+    resultEl.textContent = "OCR tamamlandı. (Metin kutusunu kontrol et)";
   } catch (e) {
     resultEl.textContent = `OCR hata: ${e.message}`;
   } finally {
     runOcrBtn.disabled = false;
+    sendToBackendBtn.disabled = false;
     runOcrBtn.textContent = "OCR Başlat";
   }
 });
 
-// Send to backend (REAL)
+// Send to backend
 sendToBackendBtn.addEventListener("click", async () => {
   resultEl.textContent = "";
   const labelText = (ocrTextEl.value || "").trim();
@@ -100,51 +100,132 @@ sendToBackendBtn.addEventListener("click", async () => {
     .trim()
     .replace(/\/+$/, "");
 
-  // Opsiyonel alanlar (HTML'de yoksa null kalır)
-  const barcode = barcodeEl ? String(barcodeEl.value || "").trim() : "";
-  const brand = brandEl ? String(brandEl.value || "").trim() : "";
-  const name = nameEl ? String(nameEl.value || "").trim() : "";
-
-  const payload = {
-    labelText,
-    // boşsa göndermeyelim (backend zaten null yapıyor ama payload sade kalsın)
-    ...(barcode ? { barcode } : {}),
-    ...(brand ? { brand } : {}),
-    ...(name ? { name } : {})
-  };
-
   sendToBackendBtn.disabled = true;
+  runOcrBtn.disabled = true;
   sendToBackendBtn.textContent = "Analiz ediliyor...";
 
   try {
-    const r = await fetch(`${base}/ocr/analyze`, {
+    const r = await fetch(`${base}/analyze-label`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        labelText,
+        // İleride: barcode/brand/name de gönderebiliriz
+      }),
     });
 
     const data = await r.json().catch(() => null);
 
     if (!r.ok) {
-      const msg =
-        (data && (data.message || data.error)) ||
-        `HTTP ${r.status}`;
-      throw new Error(msg);
+      resultEl.textContent =
+        `Backend hata: ${r.status}\n` + JSON.stringify(data, null, 2);
+      return;
     }
 
-    // Ekrana temiz JSON bas
-    resultEl.textContent = JSON.stringify(data, null, 2);
+    // Sonucu sade ve okunur bas
+    resultEl.textContent = JSON.stringify(
+      {
+        decision: data?.decision || null,
+        analysis: data?.analysis || null,
+        meta: data?.meta || null,
+      },
+      null,
+      2
+    );
   } catch (e) {
     resultEl.textContent = `Backend hata: ${e.message}`;
   } finally {
     sendToBackendBtn.disabled = false;
+    runOcrBtn.disabled = false;
     sendToBackendBtn.textContent = "Analiz Et";
   }
 });
 
-// --- Placeholder OCR ---
-// Burayı, senin kurduğun OCR (örn. Tesseract / Apple Vision / vs) ile değiştireceğiz.
-async function runOcrOnImage(file) {
-  // Şimdilik sadece “seçim çalışıyor mu” test edelim.
-  return "TEST: Foto seçimi OK. OCR entegrasyonu bir sonraki adım.";
+// --- Real OCR with Tesseract.js ---
+// Notlar:
+// - iOS Safari’de büyük fotoğraflar RAM’i şişirebilir.
+// - O yüzden resmi OCR öncesi küçültüyoruz (max 1600px).
+async function runOcrOnImage(file, onProgress) {
+  if (typeof Tesseract === "undefined") {
+    throw new Error("Tesseract yüklenmedi. index.html içine CDN scripti ekli mi?");
+  }
+
+  // Görseli küçült (performans için)
+  const resizedBlob = await downscaleImage(file, 1600, 0.85);
+
+  const lang = "eng"; // şimdilik. İstersen sonra tur+eng gibi deneriz (model boyutu artar)
+  const worker = await Tesseract.createWorker(lang, 1, {
+    logger: (m) => {
+      if (!onProgress) return;
+      if (m.status === "recognizing text" && typeof m.progress === "number") {
+        const pct = Math.round(m.progress * 100);
+        onProgress(`OCR: ${pct}%`);
+      } else if (m.status) {
+        onProgress(`OCR: ${m.status}`);
+      }
+    },
+  });
+
+  try {
+    // OCR ayarları (çok agresif değil)
+    await worker.setParameters({
+      // PSM 6: tek blok metin gibi. Etiketlerde genelde iyi çalışır.
+      tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK,
+    });
+
+    const { data } = await worker.recognize(resizedBlob);
+    return data && data.text ? data.text : "";
+  } finally {
+    await worker.terminate();
+  }
+}
+
+// --- Image downscale helper ---
+function downscaleImage(file, maxSide = 1600, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+
+      const w = img.width;
+      const h = img.height;
+
+      const scale = Math.min(1, maxSide / Math.max(w, h));
+      const nw = Math.round(w * scale);
+      const nh = Math.round(h * scale);
+
+      const canvas = document.createElement("canvas");
+      canvas.width = nw;
+      canvas.height = nh;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Canvas context alınamadı."));
+        return;
+      }
+
+      ctx.drawImage(img, 0, 0, nw, nh);
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            reject(new Error("Görsel küçültme başarısız (blob null)."));
+            return;
+          }
+          resolve(blob);
+        },
+        "image/jpeg",
+        quality
+      );
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Görsel yüklenemedi."));
+    };
+
+    img.src = url;
+  });
 }
