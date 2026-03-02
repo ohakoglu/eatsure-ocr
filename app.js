@@ -15,10 +15,16 @@ const sendToBackendBtn = document.getElementById("sendToBackend");
 const ocrTextEl = document.getElementById("ocrText");
 const resultEl = document.getElementById("result");
 
+// (Opsiyonel) HTML'de bu inputlar varsa otomatik kullanacağız; yoksa null kalır.
+const barcodeEl = document.getElementById("barcode");
+const brandEl = document.getElementById("brand");
+const nameEl = document.getElementById("name");
+
 let selectedFile = null;
 
 // Init
-backendUrlEl.value = localStorage.getItem(LS_BACKEND) || "https://eatsure-backend-4dkh.onrender.com";
+backendUrlEl.value =
+  localStorage.getItem(LS_BACKEND) || "https://eatsure-backend-4dkh.onrender.com";
 
 saveBackendBtn.addEventListener("click", () => {
   const v = (backendUrlEl.value || "").trim().replace(/\/+$/, "");
@@ -29,7 +35,9 @@ saveBackendBtn.addEventListener("click", () => {
 
 checkHealthBtn.addEventListener("click", async () => {
   healthResultEl.textContent = "Kontrol ediliyor...";
-  const base = (localStorage.getItem(LS_BACKEND) || backendUrlEl.value || "").trim().replace(/\/+$/, "");
+  const base = (localStorage.getItem(LS_BACKEND) || backendUrlEl.value || "")
+    .trim()
+    .replace(/\/+$/, "");
   try {
     const r = await fetch(`${base}/health`);
     const t = await r.text();
@@ -67,8 +75,7 @@ runOcrBtn.addEventListener("click", async () => {
   runOcrBtn.textContent = "OCR çalışıyor...";
 
   try {
-    // Burayı kendi OCR motoruna bağlayacağız.
-    // Şimdilik placeholder: “metin yok” demesin diye.
+    // Burayı daha sonra gerçek OCR motoruna bağlayacağız.
     const text = await runOcrOnImage(selectedFile);
     ocrTextEl.value = text || "";
     resultEl.textContent = "OCR tamamlandı.";
@@ -80,26 +87,53 @@ runOcrBtn.addEventListener("click", async () => {
   }
 });
 
-// Send to backend
+// Send to backend (REAL)
 sendToBackendBtn.addEventListener("click", async () => {
   resultEl.textContent = "";
-  const text = (ocrTextEl.value || "").trim();
-  if (!text) {
+  const labelText = (ocrTextEl.value || "").trim();
+  if (!labelText) {
     resultEl.textContent = "OCR metni boş. Önce OCR çalıştır veya metni yapıştır.";
     return;
   }
 
-  const base = (localStorage.getItem(LS_BACKEND) || backendUrlEl.value || "").trim().replace(/\/+$/, "");
+  const base = (localStorage.getItem(LS_BACKEND) || backendUrlEl.value || "")
+    .trim()
+    .replace(/\/+$/, "");
+
+  // Opsiyonel alanlar (HTML'de yoksa null kalır)
+  const barcode = barcodeEl ? String(barcodeEl.value || "").trim() : "";
+  const brand = brandEl ? String(brandEl.value || "").trim() : "";
+  const name = nameEl ? String(nameEl.value || "").trim() : "";
+
+  const payload = {
+    labelText,
+    // boşsa göndermeyelim (backend zaten null yapıyor ama payload sade kalsın)
+    ...(barcode ? { barcode } : {}),
+    ...(brand ? { brand } : {}),
+    ...(name ? { name } : {})
+  };
 
   sendToBackendBtn.disabled = true;
   sendToBackendBtn.textContent = "Analiz ediliyor...";
 
   try {
-    // Örnek: backend’de OCR metni için bir endpoint yoksa,
-    // şimdilik sadece gösteriyoruz.
-    // OCR endpointi eklediğimizde burası POST /ocr-analyze gibi olacak.
-    const payload = { text };
-    resultEl.textContent = JSON.stringify(payload, null, 2) + "\n\n(Not: Backend OCR endpointi eklenince burada analiz sonucu dönecek.)";
+    const r = await fetch(`${base}/ocr/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await r.json().catch(() => null);
+
+    if (!r.ok) {
+      const msg =
+        (data && (data.message || data.error)) ||
+        `HTTP ${r.status}`;
+      throw new Error(msg);
+    }
+
+    // Ekrana temiz JSON bas
+    resultEl.textContent = JSON.stringify(data, null, 2);
   } catch (e) {
     resultEl.textContent = `Backend hata: ${e.message}`;
   } finally {
@@ -109,9 +143,8 @@ sendToBackendBtn.addEventListener("click", async () => {
 });
 
 // --- Placeholder OCR ---
-// Burayı, senin kurduğun OCR (örn. Tesseract / Apple Vision / vs) ile değiştiriyoruz.
+// Burayı, senin kurduğun OCR (örn. Tesseract / Apple Vision / vs) ile değiştireceğiz.
 async function runOcrOnImage(file) {
-  // Şimdilik sadece “seçim çalışıyor mu” test edelim:
-  // gerçek OCR entegrasyonunu bir sonraki adımda bağlayacağız.
+  // Şimdilik sadece “seçim çalışıyor mu” test edelim.
   return "TEST: Foto seçimi OK. OCR entegrasyonu bir sonraki adım.";
 }
