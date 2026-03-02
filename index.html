@@ -24,6 +24,34 @@
       </div>
     </section>
 
+    <!-- ✅ Opsiyonel ama çok faydalı: metadata -->
+    <section class="card">
+      <div class="row" style="align-items:flex-end; gap:12px;">
+        <div style="flex:1;">
+          <label class="label" for="barcode">Barkod (opsiyonel)</label>
+          <input id="barcode" class="input" inputmode="numeric" placeholder="869..." />
+        </div>
+      </div>
+
+      <div class="row" style="align-items:flex-end; gap:12px;">
+        <div style="flex:1;">
+          <label class="label" for="brand">Marka (opsiyonel)</label>
+          <input id="brand" class="input" placeholder="Örn: Schär, Eti, Barilla..." />
+        </div>
+      </div>
+
+      <div class="row" style="align-items:flex-end; gap:12px;">
+        <div style="flex:1;">
+          <label class="label" for="name">Ürün adı (opsiyonel)</label>
+          <input id="name" class="input" placeholder="Örn: Spaghetti, Kraker..." />
+        </div>
+      </div>
+
+      <p class="muted small" style="margin-top:10px;">
+        Not: Bu alanlar boş kalabilir. Dolu olursa sonuç daha anlamlı olur (özellikle sertifika eşleşmesi için marka).
+      </p>
+    </section>
+
     <section class="card">
       <label class="label">Etiket fotoğrafı</label>
 
