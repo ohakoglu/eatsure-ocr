@@ -82,8 +82,7 @@ function ensureOcrSettingsUi() {
     </div>
 
     <p class="muted small" style="margin-top:10px;">
-      Not: Eğer “Worker kurulamadı / hazırlanıyor” takılı kalıyorsa bu ayarlar değil,
-      worker/core dosyaları yüklenemiyordur. Bu dosyada otomatik fallback var.
+      İpucu: Worker takılırsa bu uygulama otomatik olarak jsdelivr → unpkg fallback dener.
     </p>
   `;
 
@@ -260,7 +259,7 @@ async function prepareImageBlob(file, { maxDim = 1280, jpegQuality = 0.85, prepr
 }
 
 // -----------------------------
-// Worker watchdog (takılma çözümü)
+// Promise timeout helpers
 // -----------------------------
 function withTimeout(promise, ms, label = "timeout") {
   let t;
@@ -271,7 +270,7 @@ function withTimeout(promise, ms, label = "timeout") {
 }
 
 // -----------------------------
-// OCR (Tesseract.js) — watchdog + fallback
+// OCR (Tesseract.js) — timeout + fallback
 // -----------------------------
 async function runOcrOnImage(file) {
   if (!window.Tesseract) {
@@ -289,9 +288,10 @@ async function runOcrOnImage(file) {
   let lastErr = null;
 
   for (const aset of OCR_ASSET_SETS) {
-    setResult(`OCR motoru hazırlanıyor (worker)... [${aset.name}]`);
-
     try {
+      setResult(`OCR motoru hazırlanıyor (worker)... [${aset.name}]`);
+
+      // ✅ workerBlobURL kaldırıldı (iOS/Safari uyumluluğu için)
       const worker = await withTimeout(
         window.Tesseract.createWorker({
           logger: m => {
@@ -299,30 +299,29 @@ async function runOcrOnImage(file) {
               const pct = Math.floor(m.progress * 100);
               if (pct !== lastPct) {
                 lastPct = pct;
-                setResult(`OCR çalışıyor... %${pct}`);
+                setResult(`OCR çalışıyor... %${pct} [${aset.name}]`);
               }
             }
           },
           workerPath: aset.workerPath,
           corePath: aset.corePath,
-          langPath: TESSDATA_LANG_PATH,
-          workerBlobURL: true
+          langPath: TESSDATA_LANG_PATH
         }),
-        12000,
+        20000,
         `Worker kurulumu zaman aşımı (${aset.name})`
       );
 
-      await withTimeout(worker.loadLanguage(lang), 20000, `Dil yükleme zaman aşımı (${lang})`);
-      await withTimeout(worker.initialize(lang), 20000, `Initialize zaman aşımı (${lang})`);
+      await withTimeout(worker.loadLanguage(lang), 30000, `Dil yükleme zaman aşımı (${lang})`);
+      await withTimeout(worker.initialize(lang), 30000, `Initialize zaman aşımı (${lang})`);
 
-      const { data } = await withTimeout(worker.recognize(imgBlob), 60000, "OCR recognize zaman aşımı");
+      const { data } = await withTimeout(worker.recognize(imgBlob), 120000, "OCR recognize zaman aşımı");
       await worker.terminate();
 
       const text = data && data.text ? String(data.text) : "";
       return text.trim();
     } catch (e) {
       lastErr = e;
-      // bir sonraki CDN setine geç
+      // sıradaki CDN'e geç
     }
   }
 
