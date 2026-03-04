@@ -22,10 +22,6 @@ let selectedFile = null;
 // -----------------------------
 // OCR Asset Paths (PRIMARY + FALLBACK)
 // -----------------------------
-// Amaç: Worker kurulamadı / Load failed sorununu bitirmek.
-// - workerPath + corePath açıkça set edilecek.
-// - jsdelivr başarısızsa unpkg fallback denenecek.
-// - langPath sabit: Project Naptha tessdata (CORS genelde sorunsuz)
 const TESSDATA_LANG_PATH = "https://tessdata.projectnaptha.com/4.0.0";
 
 const OCR_ASSET_SETS = [
@@ -42,7 +38,7 @@ const OCR_ASSET_SETS = [
 ];
 
 // -----------------------------
-// Small UI helpers (inserted dynamically)
+// UI helpers (OCR settings card)
 // -----------------------------
 function ensureOcrSettingsUi() {
   if (document.getElementById("ocrSettingsCard")) return;
@@ -86,8 +82,8 @@ function ensureOcrSettingsUi() {
     </div>
 
     <p class="muted small" style="margin-top:10px;">
-      Not: 1600/2048 kaliteyi artırabilir ama iPhone’da daha yavaş çalışır.
-      Eğer “Worker kurulamadı” görürsen, bu ayarlar değil; worker/core dosyaları yüklenemiyordur.
+      Not: Eğer “Worker kurulamadı / hazırlanıyor” takılı kalıyorsa bu ayarlar değil,
+      worker/core dosyaları yüklenemiyordur. Bu dosyada otomatik fallback var.
     </p>
   `;
 
@@ -216,15 +212,11 @@ async function loadImageFromFile(file) {
   }
 }
 
-/**
- * ✅ Downscale + (opsiyonel) preprocess
- */
 async function prepareImageBlob(file, { maxDim = 1280, jpegQuality = 0.85, preprocessing = true } = {}) {
   const img = await loadImageFromFile(file);
 
   const w = img.naturalWidth || img.width;
   const h = img.naturalHeight || img.height;
-
   if (!w || !h) throw new Error("Görsel boyutu okunamadı.");
 
   const scale = Math.min(1, maxDim / Math.max(w, h));
@@ -257,47 +249,6 @@ async function prepareImageBlob(file, { maxDim = 1280, jpegQuality = 0.85, prepr
       data[i] = data[i + 1] = data[i + 2] = y;
     }
     ctx.putImageData(imgData, 0, 0);
-
-    // mild sharpen
-    const src = ctx.getImageData(0, 0, nw, nh);
-    const dst = ctx.createImageData(nw, nh);
-    const s = src.data;
-    const d = dst.data;
-
-    function idx(x, y) {
-      return (y * nw + x) * 4;
-    }
-
-    for (let y = 1; y < nh - 1; y++) {
-      for (let x = 1; x < nw - 1; x++) {
-        const c = idx(x, y);
-        const center = s[c];
-        const up = s[idx(x, y - 1)];
-        const down = s[idx(x, y + 1)];
-        const left = s[idx(x - 1, y)];
-        const right = s[idx(x + 1, y)];
-
-        let v = 5 * center - up - down - left - right;
-        v = v < 0 ? 0 : v > 255 ? 255 : v;
-
-        d[c] = d[c + 1] = d[c + 2] = v;
-        d[c + 3] = s[c + 3];
-      }
-    }
-
-    // edges copy
-    for (let x = 0; x < nw; x++) {
-      const t0 = idx(x, 0), t1 = idx(x, nh - 1);
-      d[t0] = s[t0]; d[t0 + 1] = s[t0 + 1]; d[t0 + 2] = s[t0 + 2]; d[t0 + 3] = 255;
-      d[t1] = s[t1]; d[t1 + 1] = s[t1 + 1]; d[t1 + 2] = s[t1 + 2]; d[t1 + 3] = 255;
-    }
-    for (let y = 0; y < nh; y++) {
-      const l0 = idx(0, y), l1 = idx(nw - 1, y);
-      d[l0] = s[l0]; d[l0 + 1] = s[l0 + 1]; d[l0 + 2] = s[l0 + 2]; d[l0 + 3] = 255;
-      d[l1] = s[l1]; d[l1 + 1] = s[l1 + 1]; d[l1 + 2] = s[l1 + 2]; d[l1 + 3] = 255;
-    }
-
-    ctx.putImageData(dst, 0, 0);
   }
 
   const blob = await new Promise(resolve => {
@@ -309,19 +260,18 @@ async function prepareImageBlob(file, { maxDim = 1280, jpegQuality = 0.85, prepr
 }
 
 // -----------------------------
-// Small fetch probe (debug)
+// Worker watchdog (takılma çözümü)
 // -----------------------------
-async function probeUrl(url) {
-  try {
-    const r = await fetch(url, { method: "GET", cache: "no-store" });
-    return { ok: r.ok, status: r.status };
-  } catch (e) {
-    return { ok: false, status: 0, error: e.message };
-  }
+function withTimeout(promise, ms, label = "timeout") {
+  let t;
+  const timeoutPromise = new Promise((_, reject) => {
+    t = setTimeout(() => reject(new Error(label)), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(t));
 }
 
 // -----------------------------
-// OCR (Tesseract.js) — robust worker/core paths + fallback
+// OCR (Tesseract.js) — watchdog + fallback
 // -----------------------------
 async function runOcrOnImage(file) {
   if (!window.Tesseract) {
@@ -329,8 +279,6 @@ async function runOcrOnImage(file) {
   }
 
   const { maxDim, lang, preprocessing } = getOcrSettings();
-
-  // 1) downscale + preprocess
   const imgBlob = await prepareImageBlob(file, {
     maxDim,
     jpegQuality: 0.85,
@@ -338,58 +286,49 @@ async function runOcrOnImage(file) {
   });
 
   let lastPct = -1;
-
-  // 2) Worker create with fallback asset sets
   let lastErr = null;
 
   for (const aset of OCR_ASSET_SETS) {
     setResult(`OCR motoru hazırlanıyor (worker)... [${aset.name}]`);
 
-    // İsteğe bağlı: hızlı probe (kullanıcıya nedenini göstermek için)
-    const wProbe = await probeUrl(aset.workerPath);
-    const cProbe = await probeUrl(aset.corePath);
-
-    if (!wProbe.ok || !cProbe.ok) {
-      // Probe başarısızsa bile deneyelim; ama bilgi verelim
-      // (bazı ortamlarda probe CORS yüzünden “ok” yanlış raporlayabilir)
-    }
-
     try {
-      const worker = await window.Tesseract.createWorker({
-        logger: m => {
-          if (m.status === "recognizing text" && typeof m.progress === "number") {
-            const pct = Math.floor(m.progress * 100);
-            if (pct !== lastPct) {
-              lastPct = pct;
-              setResult(`OCR çalışıyor... %${pct}`);
+      const worker = await withTimeout(
+        window.Tesseract.createWorker({
+          logger: m => {
+            if (m.status === "recognizing text" && typeof m.progress === "number") {
+              const pct = Math.floor(m.progress * 100);
+              if (pct !== lastPct) {
+                lastPct = pct;
+                setResult(`OCR çalışıyor... %${pct}`);
+              }
             }
-          }
-        },
-        workerPath: aset.workerPath,
-        corePath: aset.corePath,
-        langPath: TESSDATA_LANG_PATH,
-        // Cross-origin worker sorunlarını azaltır:
-        workerBlobURL: true
-      });
+          },
+          workerPath: aset.workerPath,
+          corePath: aset.corePath,
+          langPath: TESSDATA_LANG_PATH,
+          workerBlobURL: true
+        }),
+        12000,
+        `Worker kurulumu zaman aşımı (${aset.name})`
+      );
 
-      await worker.loadLanguage(lang);
-      await worker.initialize(lang);
+      await withTimeout(worker.loadLanguage(lang), 20000, `Dil yükleme zaman aşımı (${lang})`);
+      await withTimeout(worker.initialize(lang), 20000, `Initialize zaman aşımı (${lang})`);
 
-      const { data } = await worker.recognize(imgBlob);
+      const { data } = await withTimeout(worker.recognize(imgBlob), 60000, "OCR recognize zaman aşımı");
       await worker.terminate();
 
       const text = data && data.text ? String(data.text) : "";
       return text.trim();
     } catch (e) {
       lastErr = e;
-      // fallback’e geç
+      // bir sonraki CDN setine geç
     }
   }
 
-  // 3) Hepsi başarısızsa: anlaşılır hata
   const msg = lastErr ? (lastErr.message || String(lastErr)) : "Bilinmeyen hata";
   throw new Error(
-    `Worker kurulamadı. (Muhtemel worker/core yükleme sorunu)\nSon hata: ${msg}\n` +
+    `OCR Worker kurulamadı / takıldı.\nSon hata: ${msg}\n` +
     `Not: Bu genelde CDN/wasm/worker erişiminden olur.`
   );
 }
