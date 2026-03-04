@@ -1,5 +1,7 @@
 // --- Simple local storage for backend url ---
 const LS_BACKEND = "eatsure_backend_url";
+const LS_MAXDIM = "eatsure_ocr_maxdim";
+const LS_LANG = "eatsure_ocr_lang";
 
 const backendUrlEl = document.getElementById("backendUrl");
 const saveBackendBtn = document.getElementById("saveBackend");
@@ -17,16 +19,106 @@ const resultEl = document.getElementById("result");
 
 let selectedFile = null;
 
-// ✅ Tek yerden OCR dili yönetimi
-// Daha hızlı olsun istersen: "eng"
-// TR ağırlıklı etiketlerde: "tur"
-// Karışık etiketlerde genelde en iyisi: "eng+tur"
-const OCR_LANG = "eng+tur";
+// -----------------------------
+// Small UI helpers (inserted dynamically)
+// -----------------------------
+function ensureOcrSettingsUi() {
+  // Zaten varsa tekrar ekleme
+  if (document.getElementById("ocrSettingsCard")) return;
 
-function getBaseUrl() {
-  return (localStorage.getItem(LS_BACKEND) || backendUrlEl.value || "")
-    .trim()
-    .replace(/\/+$/, "");
+  const main = document.querySelector("main.wrap") || document.body;
+
+  // 1) OCR Settings Card
+  const card = document.createElement("section");
+  card.className = "card";
+  card.id = "ocrSettingsCard";
+
+  card.innerHTML = `
+    <label class="label">OCR Ayarları</label>
+
+    <div class="row" style="gap:10px; flex-wrap:wrap;">
+      <div style="min-width:180px;">
+        <div class="muted small" style="margin-bottom:6px;">Görsel çözünürlüğü (max)</div>
+        <select id="maxDimSelect" class="input" style="height:42px;">
+          <option value="1024">1024 (hızlı)</option>
+          <option value="1280" selected>1280 (denge)</option>
+          <option value="1600">1600 (daha iyi OCR)</option>
+          <option value="2048">2048 (yavaş ama güçlü)</option>
+        </select>
+      </div>
+
+      <div style="min-width:180px;">
+        <div class="muted small" style="margin-bottom:6px;">Dil</div>
+        <select id="langSelect" class="input" style="height:42px;">
+          <option value="eng">eng (daha hızlı)</option>
+          <option value="eng+tur" selected>eng+tur (TR etiket)</option>
+        </select>
+      </div>
+
+      <div style="min-width:180px;">
+        <div class="muted small" style="margin-bottom:6px;">Ön işleme</div>
+        <select id="prepSelect" class="input" style="height:42px;">
+          <option value="on" selected>Açık (önerilir)</option>
+          <option value="off">Kapalı</option>
+        </select>
+      </div>
+    </div>
+
+    <p class="muted small" style="margin-top:10px;">
+      Not: 1600/2048 kaliteyi artırabilir ama iPhone’da daha yavaş çalışır.
+    </p>
+  `;
+
+  // Card'ı “Etiket fotoğrafı” kartının ÜSTÜNE koy
+  const cards = main.querySelectorAll("section.card");
+  if (cards && cards.length > 1) {
+    main.insertBefore(card, cards[1]); // ikinci kart etiket kartıydı
+  } else {
+    main.appendChild(card);
+  }
+
+  // Load saved settings
+  const maxDimSel = document.getElementById("maxDimSelect");
+  const langSel = document.getElementById("langSelect");
+  const prepSel = document.getElementById("prepSelect");
+
+  const savedMaxDim = localStorage.getItem(LS_MAXDIM);
+  const savedLang = localStorage.getItem(LS_LANG);
+
+  if (savedMaxDim) maxDimSel.value = savedMaxDim;
+  if (savedLang) langSel.value = savedLang;
+
+  maxDimSel.addEventListener("change", () => {
+    localStorage.setItem(LS_MAXDIM, String(maxDimSel.value));
+  });
+  langSel.addEventListener("change", () => {
+    localStorage.setItem(LS_LANG, String(langSel.value));
+  });
+  // prepSel'i local'e kaydetmeye gerek yok (istersen ekleriz)
+}
+
+function getOcrSettings() {
+  const maxDimSelect = document.getElementById("maxDimSelect");
+  const langSelect = document.getElementById("langSelect");
+  const prepSelect = document.getElementById("prepSelect");
+
+  const maxDim =
+    parseInt(
+      (maxDimSelect && maxDimSelect.value) ||
+        localStorage.getItem(LS_MAXDIM) ||
+        "1280",
+      10
+    ) || 1280;
+
+  const lang =
+    (langSelect && langSelect.value) ||
+    localStorage.getItem(LS_LANG) ||
+    "eng+tur";
+
+  const preprocessing =
+    (prepSelect && prepSelect.value) ? (prepSelect.value === "on") : true;
+
+  return { maxDim, lang, preprocessing };
 }
 
 function setResult(objOrText) {
@@ -37,9 +129,20 @@ function setResult(objOrText) {
   }
 }
 
+function getBaseUrl() {
+  return (localStorage.getItem(LS_BACKEND) || backendUrlEl.value || "")
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+// -----------------------------
 // Init
+// -----------------------------
 backendUrlEl.value =
   localStorage.getItem(LS_BACKEND) || "https://eatsure-backend-4dkh.onrender.com";
+
+// OCR settings UI (inject once)
+ensureOcrSettingsUi();
 
 saveBackendBtn.addEventListener("click", () => {
   const v = (backendUrlEl.value || "").trim().replace(/\/+$/, "");
@@ -60,7 +163,9 @@ checkHealthBtn.addEventListener("click", async () => {
   }
 });
 
+// -----------------------------
 // File selection
+// -----------------------------
 fileInput.addEventListener("change", () => {
   const f = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
   selectedFile = f;
@@ -76,29 +181,11 @@ fileInput.addEventListener("change", () => {
   previewImg.style.display = "block";
 });
 
-/**
- * ✅ dataURL -> Blob (fallback için)
- */
-function dataUrlToBlob(dataUrl) {
-  const parts = String(dataUrl).split(",");
-  if (parts.length < 2) throw new Error("dataURL parse edilemedi.");
-  const mimeMatch = parts[0].match(/data:(.*?);base64/);
-  const mime = mimeMatch ? mimeMatch[1] : "image/jpeg";
-  const binStr = atob(parts[1]);
-  const len = binStr.length;
-  const arr = new Uint8Array(len);
-  for (let i = 0; i < len; i++) arr[i] = binStr.charCodeAt(i);
-  return new Blob([arr], { type: mime });
-}
-
-/**
- * ✅ Görseli küçült (iOS’ta hız için kritik)
- * - maxDim: 1280 (genelde yeterli)
- * - jpegQuality: 0.85
- */
-async function downscaleImage(file, maxDim = 1280, jpegQuality = 0.85) {
+// -----------------------------
+// Image helpers
+// -----------------------------
+async function loadImageFromFile(file) {
   const imgUrl = URL.createObjectURL(file);
-
   try {
     const img = await new Promise((resolve, reject) => {
       const im = new Image();
@@ -106,58 +193,145 @@ async function downscaleImage(file, maxDim = 1280, jpegQuality = 0.85) {
       im.onerror = reject;
       im.src = imgUrl;
     });
-
-    const w = img.naturalWidth || img.width;
-    const h = img.naturalHeight || img.height;
-
-    if (!w || !h) {
-      throw new Error("Görsel boyutu okunamadı.");
-    }
-
-    // küçültme oranı
-    const scale = Math.min(1, maxDim / Math.max(w, h));
-    const nw = Math.max(1, Math.round(w * scale));
-    const nh = Math.max(1, Math.round(h * scale));
-
-    const canvas = document.createElement("canvas");
-    canvas.width = nw;
-    canvas.height = nh;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Canvas context alınamadı (2D).");
-
-    ctx.drawImage(img, 0, 0, nw, nh);
-
-    // iOS'ta bazen toBlob null dönebiliyor → fallback ekliyoruz
-    const blob = await new Promise(resolve => {
-      canvas.toBlob(b => resolve(b), "image/jpeg", jpegQuality);
-    });
-
-    if (blob) return blob;
-
-    // Fallback: toDataURL -> Blob
-    const dataUrl = canvas.toDataURL("image/jpeg", jpegQuality);
-    return dataUrlToBlob(dataUrl);
+    return img;
   } finally {
     URL.revokeObjectURL(imgUrl);
   }
 }
 
 /**
- * ✅ OCR (Tesseract.js)
- * Not: index.html içinde tesseract.min.js yüklenmiş olmalı.
+ * ✅ Downscale + (opsiyonel) preprocess
+ * - maxDim: 1024/1280/1600/2048
+ * - jpegQuality: 0.85
+ * - preprocessing: true -> grayscale + contrast + mild sharpen
  */
+async function prepareImageBlob(file, { maxDim = 1280, jpegQuality = 0.85, preprocessing = true } = {}) {
+  const img = await loadImageFromFile(file);
+
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+
+  if (!w || !h) throw new Error("Görsel boyutu okunamadı.");
+
+  const scale = Math.min(1, maxDim / Math.max(w, h));
+  const nw = Math.max(1, Math.round(w * scale));
+  const nh = Math.max(1, Math.round(h * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = nw;
+  canvas.height = nh;
+
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, nw, nh);
+
+  if (preprocessing) {
+    // Grayscale + contrast stretch + mild sharpen
+    const imgData = ctx.getImageData(0, 0, nw, nh);
+    const data = imgData.data;
+
+    // 1) grayscale + contrast
+    // Basit kontrast (1.25) + parlaklık (0) yaklaşımı
+    const contrast = 1.25;
+    const intercept = 128 * (1 - contrast);
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+
+      // luminance
+      let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+      // contrast
+      y = y * contrast + intercept;
+
+      // clamp
+      y = y < 0 ? 0 : y > 255 ? 255 : y;
+
+      data[i] = data[i + 1] = data[i + 2] = y;
+      // alpha aynı
+    }
+    ctx.putImageData(imgData, 0, 0);
+
+    // 2) mild sharpen (çok agresif yapmıyoruz)
+    // Unsharp mask benzeri basit 3x3 kernel
+    // [ 0 -1  0
+    //  -1  5 -1
+    //   0 -1  0 ]
+    const src = ctx.getImageData(0, 0, nw, nh);
+    const dst = ctx.createImageData(nw, nh);
+
+    const s = src.data;
+    const d = dst.data;
+
+    function idx(x, y) {
+      return (y * nw + x) * 4;
+    }
+
+    for (let y = 1; y < nh - 1; y++) {
+      for (let x = 1; x < nw - 1; x++) {
+        const c = idx(x, y);
+
+        // sadece gri kanal yeter (r=g=b)
+        const center = s[c];
+        const up = s[idx(x, y - 1)];
+        const down = s[idx(x, y + 1)];
+        const left = s[idx(x - 1, y)];
+        const right = s[idx(x + 1, y)];
+
+        let v = 5 * center - up - down - left - right;
+        v = v < 0 ? 0 : v > 255 ? 255 : v;
+
+        d[c] = d[c + 1] = d[c + 2] = v;
+        d[c + 3] = s[c + 3];
+      }
+    }
+
+    // kenarları aynen kopyala
+    for (let x = 0; x < nw; x++) {
+      d[idx(x, 0) + 3] = 255;
+      d[idx(x, nh - 1) + 3] = 255;
+      const t0 = idx(x, 0), t1 = idx(x, nh - 1);
+      d[t0] = s[t0]; d[t0 + 1] = s[t0 + 1]; d[t0 + 2] = s[t0 + 2];
+      d[t1] = s[t1]; d[t1 + 1] = s[t1 + 1]; d[t1 + 2] = s[t1 + 2];
+    }
+    for (let y = 0; y < nh; y++) {
+      const l0 = idx(0, y), l1 = idx(nw - 1, y);
+      d[l0] = s[l0]; d[l0 + 1] = s[l0 + 1]; d[l0 + 2] = s[l0 + 2]; d[l0 + 3] = 255;
+      d[l1] = s[l1]; d[l1 + 1] = s[l1 + 1]; d[l1 + 2] = s[l1 + 2]; d[l1 + 3] = 255;
+    }
+
+    ctx.putImageData(dst, 0, 0);
+  }
+
+  const blob = await new Promise(resolve => {
+    canvas.toBlob(b => resolve(b), "image/jpeg", jpegQuality);
+  });
+
+  if (!blob) throw new Error("Görsel dönüştürülemedi.");
+  return blob;
+}
+
+// -----------------------------
+// OCR (Tesseract.js)
+// -----------------------------
 async function runOcrOnImage(file) {
   if (!window.Tesseract) {
     throw new Error("Tesseract.js yüklenmemiş. index.html'e CDN script'i ekle.");
   }
 
-  // Hız için downscale
-  const imgBlob = await downscaleImage(file, 1280, 0.85);
+  const { maxDim, lang, preprocessing } = getOcrSettings();
+
+  // 1) downscale + preprocess
+  const imgBlob = await prepareImageBlob(file, {
+    maxDim,
+    jpegQuality: 0.85,
+    preprocessing
+  });
 
   let lastPct = -1;
 
-  const { data } = await window.Tesseract.recognize(imgBlob, OCR_LANG, {
+  const { data } = await window.Tesseract.recognize(imgBlob, lang, {
     logger: m => {
       if (m.status === "recognizing text" && typeof m.progress === "number") {
         const pct = Math.floor(m.progress * 100);
@@ -169,11 +343,13 @@ async function runOcrOnImage(file) {
     }
   });
 
-  const text = (data && data.text) ? String(data.text) : "";
+  const text = data && data.text ? String(data.text) : "";
   return text.trim();
 }
 
+// -----------------------------
 // OCR button
+// -----------------------------
 runOcrBtn.addEventListener("click", async () => {
   setResult("");
   if (!selectedFile) {
@@ -198,7 +374,9 @@ runOcrBtn.addEventListener("click", async () => {
   }
 });
 
-// ✅ Send to backend (POST /analyze-label)
+// -----------------------------
+// Send to backend (POST /analyze-label)
+// -----------------------------
 sendToBackendBtn.addEventListener("click", async () => {
   setResult("");
   const labelText = (ocrTextEl.value || "").trim();
@@ -213,13 +391,7 @@ sendToBackendBtn.addEventListener("click", async () => {
   sendToBackendBtn.textContent = "Analiz ediliyor...";
 
   try {
-    const payload = {
-      labelText
-      // İstersen sonra buraya barcode/brand/name ekleriz.
-      // barcode: "...",
-      // brand: "...",
-      // name: "..."
-    };
+    const payload = { labelText };
 
     const r = await fetch(`${base}/analyze-label`, {
       method: "POST",
