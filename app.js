@@ -17,6 +17,12 @@ const resultEl = document.getElementById("result");
 
 let selectedFile = null;
 
+// ✅ Tek yerden OCR dili yönetimi
+// Daha hızlı olsun istersen: "eng"
+// TR ağırlıklı etiketlerde: "tur"
+// Karışık etiketlerde genelde en iyisi: "eng+tur"
+const OCR_LANG = "eng+tur";
+
 function getBaseUrl() {
   return (localStorage.getItem(LS_BACKEND) || backendUrlEl.value || "")
     .trim()
@@ -71,6 +77,21 @@ fileInput.addEventListener("change", () => {
 });
 
 /**
+ * ✅ dataURL -> Blob (fallback için)
+ */
+function dataUrlToBlob(dataUrl) {
+  const parts = String(dataUrl).split(",");
+  if (parts.length < 2) throw new Error("dataURL parse edilemedi.");
+  const mimeMatch = parts[0].match(/data:(.*?);base64/);
+  const mime = mimeMatch ? mimeMatch[1] : "image/jpeg";
+  const binStr = atob(parts[1]);
+  const len = binStr.length;
+  const arr = new Uint8Array(len);
+  for (let i = 0; i < len; i++) arr[i] = binStr.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+/**
  * ✅ Görseli küçült (iOS’ta hız için kritik)
  * - maxDim: 1280 (genelde yeterli)
  * - jpegQuality: 0.85
@@ -103,19 +124,20 @@ async function downscaleImage(file, maxDim = 1280, jpegQuality = 0.85) {
     canvas.height = nh;
 
     const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas context alınamadı (2D).");
+
     ctx.drawImage(img, 0, 0, nw, nh);
 
+    // iOS'ta bazen toBlob null dönebiliyor → fallback ekliyoruz
     const blob = await new Promise(resolve => {
-      canvas.toBlob(
-        b => resolve(b),
-        "image/jpeg",
-        jpegQuality
-      );
+      canvas.toBlob(b => resolve(b), "image/jpeg", jpegQuality);
     });
 
-    if (!blob) throw new Error("Görsel dönüştürülemedi.");
+    if (blob) return blob;
 
-    return blob;
+    // Fallback: toDataURL -> Blob
+    const dataUrl = canvas.toDataURL("image/jpeg", jpegQuality);
+    return dataUrlToBlob(dataUrl);
   } finally {
     URL.revokeObjectURL(imgUrl);
   }
@@ -133,13 +155,9 @@ async function runOcrOnImage(file) {
   // Hız için downscale
   const imgBlob = await downscaleImage(file, 1280, 0.85);
 
-  // TR+EN karışık etiketlerde bazen yardımcı oluyor.
-  // İstersen sadece "eng" yapabiliriz (daha hızlı).
-  const lang = "eng+tur";
-
   let lastPct = -1;
 
-  const { data } = await window.Tesseract.recognize(imgBlob, lang, {
+  const { data } = await window.Tesseract.recognize(imgBlob, OCR_LANG, {
     logger: m => {
       if (m.status === "recognizing text" && typeof m.progress === "number") {
         const pct = Math.floor(m.progress * 100);
