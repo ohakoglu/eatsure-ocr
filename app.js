@@ -70,7 +70,92 @@ fileInput.addEventListener("change", () => {
   previewImg.style.display = "block";
 });
 
-// OCR button (şimdilik placeholder)
+/**
+ * ✅ Görseli küçült (iOS’ta hız için kritik)
+ * - maxDim: 1280 (genelde yeterli)
+ * - jpegQuality: 0.85
+ */
+async function downscaleImage(file, maxDim = 1280, jpegQuality = 0.85) {
+  const imgUrl = URL.createObjectURL(file);
+
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = reject;
+      im.src = imgUrl;
+    });
+
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+
+    if (!w || !h) {
+      throw new Error("Görsel boyutu okunamadı.");
+    }
+
+    // küçültme oranı
+    const scale = Math.min(1, maxDim / Math.max(w, h));
+    const nw = Math.max(1, Math.round(w * scale));
+    const nh = Math.max(1, Math.round(h * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = nw;
+    canvas.height = nh;
+
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, nw, nh);
+
+    const blob = await new Promise(resolve => {
+      canvas.toBlob(
+        b => resolve(b),
+        "image/jpeg",
+        jpegQuality
+      );
+    });
+
+    if (!blob) throw new Error("Görsel dönüştürülemedi.");
+
+    return blob;
+  } finally {
+    URL.revokeObjectURL(imgUrl);
+  }
+}
+
+/**
+ * ✅ OCR (Tesseract.js)
+ * Not: index.html içinde tesseract.min.js yüklenmiş olmalı.
+ */
+async function runOcrOnImage(file) {
+  if (!window.Tesseract) {
+    throw new Error("Tesseract.js yüklenmemiş. index.html'e CDN script'i ekle.");
+  }
+
+  // Hız için downscale
+  const imgBlob = await downscaleImage(file, 1280, 0.85);
+
+  // TR+EN karışık etiketlerde bazen yardımcı oluyor.
+  // İstersen sadece "eng" yapabiliriz (daha hızlı).
+  const lang = "eng+tur";
+
+  let lastPct = -1;
+
+  const { data } = await window.Tesseract.recognize(imgBlob, lang, {
+    logger: m => {
+      if (m.status === "recognizing text" && typeof m.progress === "number") {
+        const pct = Math.floor(m.progress * 100);
+        if (pct !== lastPct) {
+          lastPct = pct;
+          setResult(`OCR çalışıyor... %${pct}`);
+        }
+      }
+    }
+  });
+
+  const text = (data && data.text) ? String(data.text) : "";
+  return text.trim();
+}
+
+// OCR button
 runOcrBtn.addEventListener("click", async () => {
   setResult("");
   if (!selectedFile) {
@@ -79,16 +164,18 @@ runOcrBtn.addEventListener("click", async () => {
   }
 
   runOcrBtn.disabled = true;
+  sendToBackendBtn.disabled = true;
   runOcrBtn.textContent = "OCR çalışıyor...";
 
   try {
     const text = await runOcrOnImage(selectedFile);
     ocrTextEl.value = text || "";
-    setResult("OCR tamamlandı.");
+    setResult(text ? "OCR tamamlandı." : "OCR tamamlandı ama metin boş görünüyor.");
   } catch (e) {
     setResult(`OCR hata: ${e.message}`);
   } finally {
     runOcrBtn.disabled = false;
+    sendToBackendBtn.disabled = false;
     runOcrBtn.textContent = "OCR Başlat";
   }
 });
@@ -109,7 +196,7 @@ sendToBackendBtn.addEventListener("click", async () => {
 
   try {
     const payload = {
-      labelText,
+      labelText
       // İstersen sonra buraya barcode/brand/name ekleriz.
       // barcode: "...",
       // brand: "...",
@@ -147,8 +234,3 @@ sendToBackendBtn.addEventListener("click", async () => {
     sendToBackendBtn.textContent = "Analiz Et";
   }
 });
-
-// --- Placeholder OCR ---
-async function runOcrOnImage(file) {
-  return "TEST: Foto seçimi OK. OCR entegrasyonu bir sonraki adım.";
-}
