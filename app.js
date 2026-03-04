@@ -1,6 +1,5 @@
 // app.js — TAMAMINI DEĞİŞTİR
 
-// --- Simple local storage for backend url ---
 const LS_BACKEND = "eatsure_backend_url";
 const LS_MAXDIM = "eatsure_ocr_maxdim";
 const LS_LANG = "eatsure_ocr_lang";
@@ -28,9 +27,7 @@ let lastLogAt = 0;
 // -----------------------------
 // Helpers
 // -----------------------------
-function nowMs() {
-  return Date.now();
-}
+function nowMs() { return Date.now(); }
 
 function getBaseUrl() {
   return (localStorage.getItem(LS_BACKEND) || backendUrlEl.value || "")
@@ -44,14 +41,28 @@ function setResult(objOrText) {
 }
 
 function setStatusLine(text) {
-  // sonuç alanına tek satır yazma (spam azaltır)
-  resultEl.textContent = text;
+  resultEl.textContent = String(text);
 }
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+function tlog(msg) {
+  lastLogAt = nowMs();
+  setStatusLine(msg);
+}
+
+async function terminateWorker() {
+  try {
+    if (currentWorker) await currentWorker.terminate();
+  } catch {}
+  currentWorker = null;
+}
+
+// -----------------------------
+// OCR Settings UI (inject)
+// -----------------------------
 function ensureOcrSettingsUi() {
   if (document.getElementById("ocrSettingsCard")) return;
 
@@ -184,7 +195,7 @@ fileInput.addEventListener("change", () => {
 });
 
 // -----------------------------
-// Image prep (downscale only, preprocess opsiyonel)
+// Image prep (downscale)
 // -----------------------------
 async function loadImageFromFile(file) {
   const imgUrl = URL.createObjectURL(file);
@@ -220,7 +231,6 @@ async function prepareImageBlob(file, { maxDim = 1280, jpegQuality = 0.85, prepr
   ctx.drawImage(img, 0, 0, nw, nh);
 
   if (preprocessing) {
-    // Çok hafif gri + kontrast (agresif sharpen yok)
     const imgData = ctx.getImageData(0, 0, nw, nh);
     const d = imgData.data;
     const contrast = 1.2;
@@ -243,32 +253,88 @@ async function prepareImageBlob(file, { maxDim = 1280, jpegQuality = 0.85, prepr
 }
 
 // -----------------------------
-// Tesseract worker (CDN paths pinned)
+// Worker CDN fallback (jsdelivr -> unpkg)
 // -----------------------------
-const TESSERACT_CDN = "https://cdn.jsdelivr.net/npm/tesseract.js@5";
-const TESSERACT_WORKER_PATH = `${TESSERACT_CDN}/dist/worker.min.js`;
-const TESSERACT_CORE_PATH = `${TESSERACT_CDN}/dist/tesseract-core.wasm.js`;
-const TESSERACT_LANG_PATH = `https://tessdata.projectnaptha.com/4.0.0`;
-
-function tlog(msg) {
-  lastLogAt = nowMs();
-  setStatusLine(String(msg));
-}
-
-async function terminateWorker() {
-  try {
-    if (currentWorker) {
-      await currentWorker.terminate();
-    }
-  } catch {}
-  currentWorker = null;
-}
-
-async function runOcrOnImage(file) {
-  if (!window.Tesseract) {
-    throw new Error("Tesseract.js yüklenmemiş. index.html'e CDN script'i ekle.");
+const CDN_PROFILES = [
+  {
+    name: "jsdelivr",
+    base: "https://cdn.jsdelivr.net/npm/tesseract.js@5",
+    workerPath: "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js",
+    corePath: "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract-core.wasm.js",
+    langPath: "https://tessdata.projectnaptha.com/4.0.0"
+  },
+  {
+    name: "unpkg",
+    base: "https://unpkg.com/tesseract.js@5",
+    workerPath: "https://unpkg.com/tesseract.js@5/dist/worker.min.js",
+    corePath: "https://unpkg.com/tesseract.js@5/dist/tesseract-core.wasm.js",
+    langPath: "https://tessdata.projectnaptha.com/4.0.0"
   }
+];
 
+async function fetchCheck(url) {
+  // iOS Safari bazı HEAD'leri sevmez; GET + Range benzeri yapmayalım; düz GET (small) deneyelim
+  const r = await fetch(url, { method: "GET", cache: "no-store" });
+  if (!r.ok) throw new Error(`Erişim yok (${r.status}): ${url}`);
+  // worker/core büyük olabilir ama tarayıcı çoğunlukla hemen stream başlatır; biz sadece ok'ı görmek istiyoruz.
+  return true;
+}
+
+async function withTimeout(promise, ms, label) {
+  let t;
+  const timeout = new Promise((_, reject) => {
+    t = setTimeout(() => reject(new Error(`${label} timeout (${ms}ms)`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function createWorkerWithProfile(profile, lang, psm) {
+  if (!window.Tesseract) throw new Error("Tesseract.js yok (CDN yüklenmedi).");
+
+  tlog(`Worker dosyası kontrol: ${profile.name}...`);
+  // önce worker/core erişiyor mu kontrol edelim (burada patlıyorsa sebep net)
+  await withTimeout(fetchCheck(profile.workerPath), 8000, "workerPath");
+  await withTimeout(fetchCheck(profile.corePath), 8000, "corePath");
+
+  tlog(`OCR motoru hazırlanıyor (${profile.name})...`);
+
+  const worker = await withTimeout(
+    window.Tesseract.createWorker({
+      logger: m => {
+        if (m && m.status) {
+          const pct = (typeof m.progress === "number") ? ` %${Math.floor(m.progress * 100)}` : "";
+          tlog(`${m.status}${pct}`);
+        }
+      },
+      workerPath: profile.workerPath,
+      corePath: profile.corePath,
+      langPath: profile.langPath
+    }),
+    15000,
+    `createWorker(${profile.name})`
+  );
+
+  tlog(`Dil yükleniyor: ${lang} (${profile.name})...`);
+  await withTimeout(worker.loadLanguage(lang), 25000, "loadLanguage");
+
+  tlog(`Initialize: ${lang} (${profile.name})...`);
+  await withTimeout(worker.initialize(lang), 25000, "initialize");
+
+  await worker.setParameters({
+    tessedit_pageseg_mode: String(psm)
+  });
+
+  return worker;
+}
+
+// -----------------------------
+// OCR (Tesseract.js)
+// -----------------------------
+async function runOcrOnImage(file) {
   await terminateWorker();
 
   const { maxDim, lang, preprocessing, psm } = getOcrSettings();
@@ -276,7 +342,8 @@ async function runOcrOnImage(file) {
   tlog("Görsel hazırlanıyor...");
   const imgBlob = await prepareImageBlob(file, { maxDim, jpegQuality: 0.85, preprocessing });
 
-  // Watchdog: 90sn log yoksa kilitlendi say
+  // Watchdog: log gelmezse kilit
+  lastLogAt = nowMs();
   let watchdogAlive = true;
   const watchdog = (async () => {
     const start = nowMs();
@@ -285,48 +352,39 @@ async function runOcrOnImage(file) {
       const idle = nowMs() - lastLogAt;
       const total = nowMs() - start;
       if (idle > 90000 || total > 120000) {
-        // 90 sn hiç log yoksa veya 120 sn geçtiyse
-        throw new Error("OCR kilitlendi (iOS/worker). Dil/çözünürlük düşürüp tekrar dene.");
+        throw new Error("OCR kilitlendi (iOS/worker). Dil=eng ve maxDim=1024 ile tekrar dene.");
       }
     }
   })();
 
   try {
-    lastLogAt = nowMs();
+    let lastErr = null;
 
-    tlog("OCR motoru hazırlanıyor (worker)...");
-    currentWorker = await window.Tesseract.createWorker({
-      logger: m => {
-        // TÜM durumları yazdır (asıl fark burada)
-        if (m && m.status) {
-          const pct = (typeof m.progress === "number") ? ` %${Math.floor(m.progress * 100)}` : "";
-          tlog(`${m.status}${pct}`);
-        }
-      },
-      workerPath: TESSERACT_WORKER_PATH,
-      corePath: TESSERACT_CORE_PATH,
-      langPath: TESSERACT_LANG_PATH
-    });
+    for (const profile of CDN_PROFILES) {
+      try {
+        currentWorker = await createWorkerWithProfile(profile, lang, psm);
+        break; // başarı
+      } catch (e) {
+        lastErr = e;
+        await terminateWorker();
+        tlog(`Worker kurulum başarısız (${profile.name}): ${e.message}`);
+        // sıradaki profile geç
+      }
+    }
 
-    tlog(`Dil indiriliyor/yükleniyor: ${lang}...`);
-    await currentWorker.loadLanguage(lang);
-
-    tlog("Dil initialize ediliyor...");
-    await currentWorker.initialize(lang);
-
-    // PSM ayarı
-    await currentWorker.setParameters({
-      tessedit_pageseg_mode: String(psm)
-    });
+    if (!currentWorker) {
+      throw new Error(
+        `Worker kurulamadı. (Muhtemel ağ/CDN engeli)\nSon hata: ${lastErr ? lastErr.message : "Bilinmiyor"}`
+      );
+    }
 
     tlog("Metin okunuyor...");
-    const { data } = await currentWorker.recognize(imgBlob);
+    const { data } = await withTimeout(currentWorker.recognize(imgBlob), 120000, "recognize");
 
     const text = data && data.text ? String(data.text) : "";
     return text.trim();
   } finally {
     watchdogAlive = false;
-    // watchdog promise hata fırlatmış olabilir -> yakala
     watchdog.catch(async (e) => {
       await terminateWorker();
       setResult(`OCR hata: ${e.message}`);
