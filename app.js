@@ -67,6 +67,7 @@ function ensureOcrSettingsUi() {
     <p class="muted small" style="margin-top:10px;">
       Not: Bu sürüm “createWorker / workerPath / corePath” kullanmaz.
       En stabil yol olan <b>Tesseract.recognize()</b> ile çalışır.
+      (Worker/CDN sorunu varsa, index.html’de jsdelivr → unpkg fallback devreye girer.)
     </p>
   `;
 
@@ -269,7 +270,10 @@ function withTimeout(promise, ms, label = "timeout") {
 // -----------------------------
 async function runOcrOnImage(file) {
   if (!window.Tesseract) {
-    throw new Error("Tesseract.js yüklenmemiş. index.html'e CDN script'i ekle.");
+    throw new Error(
+      "Tesseract.js yüklenmemiş.\n" +
+      "index.html’de CDN yüklemesi başarısız olmuş olabilir (jsdelivr/unpkg)."
+    );
   }
 
   const { maxDim, lang, preprocessing } = getOcrSettings();
