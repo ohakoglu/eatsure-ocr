@@ -1,7 +1,8 @@
-// --- Simple local storage for backend url ---
+// --- Simple local storage for backend url + ocr settings ---
 const LS_BACKEND = "eatsure_backend_url";
 const LS_MAXDIM = "eatsure_ocr_maxdim";
 const LS_LANG = "eatsure_ocr_lang";
+const LS_PREP = "eatsure_ocr_prep";
 
 const backendUrlEl = document.getElementById("backendUrl");
 const saveBackendBtn = document.getElementById("saveBackend");
@@ -18,24 +19,6 @@ const ocrTextEl = document.getElementById("ocrText");
 const resultEl = document.getElementById("result");
 
 let selectedFile = null;
-
-// -----------------------------
-// OCR Asset Paths (PRIMARY + FALLBACK)
-// -----------------------------
-const TESSDATA_LANG_PATH = "https://tessdata.projectnaptha.com/4.0.0";
-
-const OCR_ASSET_SETS = [
-  {
-    name: "jsdelivr",
-    workerPath: "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js",
-    corePath: "https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core.wasm.js"
-  },
-  {
-    name: "unpkg",
-    workerPath: "https://unpkg.com/tesseract.js@5/dist/worker.min.js",
-    corePath: "https://unpkg.com/tesseract.js-core@5/tesseract-core.wasm.js"
-  }
-];
 
 // -----------------------------
 // UI helpers (OCR settings card)
@@ -66,7 +49,7 @@ function ensureOcrSettingsUi() {
       <div style="min-width:180px;">
         <div class="muted small" style="margin-bottom:6px;">Dil</div>
         <select id="langSelect" class="input" style="height:42px;">
-          <option value="eng">eng (daha hızlı)</option>
+          <option value="eng">eng (hızlı)</option>
           <option value="tur">tur (TR ağırlıklı)</option>
           <option value="eng+tur" selected>eng+tur (TR+EN)</option>
         </select>
@@ -75,17 +58,19 @@ function ensureOcrSettingsUi() {
       <div style="min-width:180px;">
         <div class="muted small" style="margin-bottom:6px;">Ön işleme</div>
         <select id="prepSelect" class="input" style="height:42px;">
-          <option value="on" selected>Açık (önerilir)</option>
+          <option value="on" selected>Açık (basit grayscale)</option>
           <option value="off">Kapalı</option>
         </select>
       </div>
     </div>
 
     <p class="muted small" style="margin-top:10px;">
-      İpucu: Worker takılırsa bu uygulama otomatik olarak jsdelivr → unpkg fallback dener.
+      Not: Bu sürüm “createWorker / workerPath / corePath” kullanmaz.
+      En stabil yol olan <b>Tesseract.recognize()</b> ile çalışır.
     </p>
   `;
 
+  // Kartı “Etiket fotoğrafı” kartının ÜSTÜNE koy
   const cards = main.querySelectorAll("section.card");
   if (cards && cards.length > 1) {
     main.insertBefore(card, cards[1]);
@@ -93,21 +78,22 @@ function ensureOcrSettingsUi() {
     main.appendChild(card);
   }
 
+  // Load saved settings
   const maxDimSel = document.getElementById("maxDimSelect");
   const langSel = document.getElementById("langSelect");
+  const prepSel = document.getElementById("prepSelect");
 
   const savedMaxDim = localStorage.getItem(LS_MAXDIM);
   const savedLang = localStorage.getItem(LS_LANG);
+  const savedPrep = localStorage.getItem(LS_PREP);
 
   if (savedMaxDim) maxDimSel.value = savedMaxDim;
   if (savedLang) langSel.value = savedLang;
+  if (savedPrep) prepSel.value = savedPrep;
 
-  maxDimSel.addEventListener("change", () => {
-    localStorage.setItem(LS_MAXDIM, String(maxDimSel.value));
-  });
-  langSel.addEventListener("change", () => {
-    localStorage.setItem(LS_LANG, String(langSel.value));
-  });
+  maxDimSel.addEventListener("change", () => localStorage.setItem(LS_MAXDIM, String(maxDimSel.value)));
+  langSel.addEventListener("change", () => localStorage.setItem(LS_LANG, String(langSel.value)));
+  prepSel.addEventListener("change", () => localStorage.setItem(LS_PREP, String(prepSel.value)));
 }
 
 function getOcrSettings() {
@@ -128,9 +114,12 @@ function getOcrSettings() {
     localStorage.getItem(LS_LANG) ||
     "eng+tur";
 
-  const preprocessing =
-    (prepSelect && prepSelect.value) ? (prepSelect.value === "on") : true;
+  const prepValue =
+    (prepSelect && prepSelect.value) ||
+    localStorage.getItem(LS_PREP) ||
+    "on";
 
+  const preprocessing = prepValue === "on";
   return { maxDim, lang, preprocessing };
 }
 
@@ -211,7 +200,12 @@ async function loadImageFromFile(file) {
   }
 }
 
-async function prepareImageBlob(file, { maxDim = 1280, jpegQuality = 0.85, preprocessing = true } = {}) {
+/**
+ * ✅ Downscale + (opsiyonel) basit grayscale
+ * - maxDim: 1024/1280/1600/2048
+ * - preprocessing: true -> grayscale + hafif kontrast (sharpen YOK)
+ */
+async function prepareImageBlob(file, { maxDim = 1280, preprocessing = true } = {}) {
   const img = await loadImageFromFile(file);
 
   const w = img.naturalWidth || img.width;
@@ -233,7 +227,8 @@ async function prepareImageBlob(file, { maxDim = 1280, jpegQuality = 0.85, prepr
     const imgData = ctx.getImageData(0, 0, nw, nh);
     const data = imgData.data;
 
-    const contrast = 1.25;
+    // Basit grayscale + hafif kontrast
+    const contrast = 1.15;
     const intercept = 128 * (1 - contrast);
 
     for (let i = 0; i < data.length; i += 4) {
@@ -251,7 +246,7 @@ async function prepareImageBlob(file, { maxDim = 1280, jpegQuality = 0.85, prepr
   }
 
   const blob = await new Promise(resolve => {
-    canvas.toBlob(b => resolve(b), "image/jpeg", jpegQuality);
+    canvas.toBlob(b => resolve(b), "image/jpeg", 0.9);
   });
 
   if (!blob) throw new Error("Görsel dönüştürülemedi.");
@@ -259,7 +254,7 @@ async function prepareImageBlob(file, { maxDim = 1280, jpegQuality = 0.85, prepr
 }
 
 // -----------------------------
-// Promise timeout helpers
+// Timeout helper
 // -----------------------------
 function withTimeout(promise, ms, label = "timeout") {
   let t;
@@ -270,7 +265,7 @@ function withTimeout(promise, ms, label = "timeout") {
 }
 
 // -----------------------------
-// OCR (Tesseract.js) — timeout + fallback
+// OCR (Tesseract.recognize) — STABLE PATH
 // -----------------------------
 async function runOcrOnImage(file) {
   if (!window.Tesseract) {
@@ -278,58 +273,34 @@ async function runOcrOnImage(file) {
   }
 
   const { maxDim, lang, preprocessing } = getOcrSettings();
-  const imgBlob = await prepareImageBlob(file, {
-    maxDim,
-    jpegQuality: 0.85,
-    preprocessing
-  });
+
+  // 1) downscale + basit preprocess
+  const imgBlob = await prepareImageBlob(file, { maxDim, preprocessing });
 
   let lastPct = -1;
-  let lastErr = null;
 
-  for (const aset of OCR_ASSET_SETS) {
-    try {
-      setResult(`OCR motoru hazırlanıyor (worker)... [${aset.name}]`);
-
-      // ✅ workerBlobURL kaldırıldı (iOS/Safari uyumluluğu için)
-      const worker = await withTimeout(
-        window.Tesseract.createWorker({
-          logger: m => {
-            if (m.status === "recognizing text" && typeof m.progress === "number") {
-              const pct = Math.floor(m.progress * 100);
-              if (pct !== lastPct) {
-                lastPct = pct;
-                setResult(`OCR çalışıyor... %${pct} [${aset.name}]`);
-              }
-            }
-          },
-          workerPath: aset.workerPath,
-          corePath: aset.corePath,
-          langPath: TESSDATA_LANG_PATH
-        }),
-        20000,
-        `Worker kurulumu zaman aşımı (${aset.name})`
-      );
-
-      await withTimeout(worker.loadLanguage(lang), 30000, `Dil yükleme zaman aşımı (${lang})`);
-      await withTimeout(worker.initialize(lang), 30000, `Initialize zaman aşımı (${lang})`);
-
-      const { data } = await withTimeout(worker.recognize(imgBlob), 120000, "OCR recognize zaman aşımı");
-      await worker.terminate();
-
-      const text = data && data.text ? String(data.text) : "";
-      return text.trim();
-    } catch (e) {
-      lastErr = e;
-      // sıradaki CDN'e geç
+  // 2) recognize — createWorker yok (en stabil)
+  const recognizePromise = window.Tesseract.recognize(imgBlob, lang, {
+    logger: m => {
+      if (m.status === "recognizing text" && typeof m.progress === "number") {
+        const pct = Math.floor(m.progress * 100);
+        if (pct !== lastPct) {
+          lastPct = pct;
+          setResult(`OCR çalışıyor... %${pct}`);
+        }
+      } else if (m.status === "loading tesseract core") {
+        setResult("OCR motoru yükleniyor...");
+      } else if (m.status === "loading language traineddata") {
+        setResult("Dil dosyası yükleniyor...");
+      }
     }
-  }
+  });
 
-  const msg = lastErr ? (lastErr.message || String(lastErr)) : "Bilinmeyen hata";
-  throw new Error(
-    `OCR Worker kurulamadı / takıldı.\nSon hata: ${msg}\n` +
-    `Not: Bu genelde CDN/wasm/worker erişiminden olur.`
-  );
+  // iPhone’da bazen uzun sürebilir: 180s timeout
+  const { data } = await withTimeout(recognizePromise, 180000, "OCR zaman aşımı (180sn)");
+
+  const text = data && data.text ? String(data.text) : "";
+  return text.trim();
 }
 
 // -----------------------------
