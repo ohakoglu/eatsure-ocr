@@ -58,8 +58,11 @@
     </p>
   </main>
 
-  <!-- ✅ Tesseract.js (tek kaynak) -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <!-- ✅ Tesseract.js: jsdelivr → (hata olursa) unpkg fallback -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"
+    onerror="this.onerror=null;this.src='https://unpkg.com/tesseract.js@5/dist/tesseract.min.js'">
+  </script>
 
   <script src="app.js"></script>
 </body>
