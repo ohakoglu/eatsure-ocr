@@ -65,13 +65,10 @@ function ensureOcrSettingsUi() {
     </div>
 
     <p class="muted small" style="margin-top:10px;">
-      Not: Bu sürüm “createWorker / workerPath / corePath” kullanmaz.
-      En stabil yol olan <b>Tesseract.recognize()</b> ile çalışır.
-      (Worker/CDN sorunu varsa, index.html’de jsdelivr → unpkg fallback devreye girer.)
+      Not: OCR butonu hâlâ kullanılabilir. Ama asıl test yolu artık fotoğrafı doğrudan backend’e gönderip AI extraction almaktır.
     </p>
   `;
 
-  // Kartı “Etiket fotoğrafı” kartının ÜSTÜNE koy
   const cards = main.querySelectorAll("section.card");
   if (cards && cards.length > 1) {
     main.insertBefore(card, cards[1]);
@@ -79,7 +76,6 @@ function ensureOcrSettingsUi() {
     main.appendChild(card);
   }
 
-  // Load saved settings
   const maxDimSel = document.getElementById("maxDimSelect");
   const langSel = document.getElementById("langSelect");
   const prepSel = document.getElementById("prepSelect");
@@ -228,7 +224,6 @@ async function prepareImageBlob(file, { maxDim = 1280, preprocessing = true } = 
     const imgData = ctx.getImageData(0, 0, nw, nh);
     const data = imgData.data;
 
-    // Basit grayscale + hafif kontrast
     const contrast = 1.15;
     const intercept = 128 * (1 - contrast);
 
@@ -252,6 +247,20 @@ async function prepareImageBlob(file, { maxDim = 1280, preprocessing = true } = 
 
   if (!blob) throw new Error("Görsel dönüştürülemedi.");
   return blob;
+}
+
+async function blobToBase64(blob) {
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+
+  const str = String(dataUrl);
+  const commaIndex = str.indexOf(",");
+  if (commaIndex === -1) throw new Error("Base64 çevrilemedi.");
+  return str.slice(commaIndex + 1);
 }
 
 // -----------------------------
@@ -278,12 +287,10 @@ async function runOcrOnImage(file) {
 
   const { maxDim, lang, preprocessing } = getOcrSettings();
 
-  // 1) downscale + basit preprocess
   const imgBlob = await prepareImageBlob(file, { maxDim, preprocessing });
 
   let lastPct = -1;
 
-  // 2) recognize — createWorker yok (en stabil)
   const recognizePromise = window.Tesseract.recognize(imgBlob, lang, {
     logger: m => {
       if (m.status === "recognizing text" && typeof m.progress === "number") {
@@ -300,7 +307,6 @@ async function runOcrOnImage(file) {
     }
   });
 
-  // iPhone’da bazen uzun sürebilir: 180s timeout
   const { data } = await withTimeout(recognizePromise, 180000, "OCR zaman aşımı (180sn)");
 
   const text = data && data.text ? String(data.text) : "";
@@ -335,22 +341,92 @@ runOcrBtn.addEventListener("click", async () => {
 });
 
 // -----------------------------
-// Send to backend (POST /analyze-label)
+// Send to backend
+// 1) Foto seçiliyse -> /analyze-image
+// 2) Foto yoksa ama text varsa -> /analyze-label
 // -----------------------------
 sendToBackendBtn.addEventListener("click", async () => {
   setResult("");
-  const labelText = (ocrTextEl.value || "").trim();
-  if (!labelText) {
-    setResult("OCR metni boş. Önce OCR çalıştır veya metni yapıştır.");
-    return;
-  }
 
   const base = getBaseUrl();
 
   sendToBackendBtn.disabled = true;
+  runOcrBtn.disabled = true;
   sendToBackendBtn.textContent = "Analiz ediliyor...";
 
   try {
+    // ✅ Öncelik: gerçek fotoğrafı backend'e gönder
+    if (selectedFile) {
+      setResult("Fotoğraf hazırlanıyor...");
+
+      const { maxDim, preprocessing } = getOcrSettings();
+      const preparedBlob = await prepareImageBlob(selectedFile, {
+        maxDim,
+        preprocessing
+      });
+
+      setResult("Fotoğraf yükleniyor...");
+
+      const imageBase64 = await blobToBase64(preparedBlob);
+      const mimeType = preparedBlob.type || "image/jpeg";
+
+      const payload = {
+        imageBase64,
+        mimeType
+      };
+
+      const r = await fetch(`${base}/analyze-image`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      const raw = await r.text();
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        data = { raw };
+      }
+
+      if (!r.ok) {
+        setResult({
+          error: "BACKEND_ERROR",
+          status: r.status,
+          response: data
+        });
+        return;
+      }
+
+      // Görsel extraction sonucunda OCR text alanını da yaklaşık dolduralım
+      const extractedText = [
+        data?.name ? `Ürün: ${data.name}` : "",
+        data?.brand ? `Marka: ${data.brand}` : "",
+        data?.barcode ? `Barkod: ${data.barcode}` : "",
+        data?.extracted?.ingredients ? `İçindekiler:\n${data.extracted.ingredients}` : "",
+        data?.extracted?.allergens ? `Alerjenler:\n${data.extracted.allergens}` : "",
+        data?.extracted?.claims ? `Beyanlar:\n${data.extracted.claims}` : "",
+        data?.extracted?.warnings ? `Uyarılar:\n${data.extracted.warnings}` : "",
+        data?.extracted?.logos ? `Logolar:\n${data.extracted.logos}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+
+      if (extractedText) {
+        ocrTextEl.value = extractedText;
+      }
+
+      setResult(data);
+      return;
+    }
+
+    // ✅ Yedek yol: foto yoksa mevcut OCR metnini gönder
+    const labelText = (ocrTextEl.value || "").trim();
+    if (!labelText) {
+      setResult("Önce fotoğraf seç veya OCR metni oluştur.");
+      return;
+    }
+
     const payload = { labelText };
 
     const r = await fetch(`${base}/analyze-label`, {
@@ -381,6 +457,7 @@ sendToBackendBtn.addEventListener("click", async () => {
     setResult(`Backend hata: ${e.message}`);
   } finally {
     sendToBackendBtn.disabled = false;
+    runOcrBtn.disabled = false;
     sendToBackendBtn.textContent = "Analiz Et";
   }
 });
